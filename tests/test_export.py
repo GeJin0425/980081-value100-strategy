@@ -28,6 +28,7 @@ def _build_fixture():
 def test_export_end_to_end(tmp_path, monkeypatch):
     fixture_df, fixture_idle = _build_fixture()
     monkeypatch.setattr(export_mod, 'fetch_980081_daily', lambda: fixture_df)
+    monkeypatch.setattr(export_mod, 'fetch_480081_daily', lambda: fixture_df)
     monkeypatch.setattr(export_mod, 'fetch_511260_close', lambda count=2500: fixture_idle)
     # 跳过前250+天MA250热身期，避免展示窗口内出现NaN
     monkeypatch.setattr(export_mod, 'DISPLAY_START', fixture_df.index[255].strftime('%Y-%m-%d'))

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .backtest import backtest
-from .fetch import fetch_511260_close, fetch_980081_daily
+from .fetch import fetch_480081_daily, fetch_511260_close, fetch_980081_daily
 from .indicators import add_indicators
 from .strategy import PARAMS, run_strategy
 
@@ -23,7 +23,7 @@ def _safe_list(series, ndigits=None):
     return [None if pd.isna(v) else float(v) for v in s]
 
 
-def compute_stats(df2, eq2, sells):
+def compute_stats(df2, eq2, sells, hold_series=None):
     first_equity = eq2['equity'].iloc[0]
     final = eq2['equity'].iloc[-1]
     years = (eq2.index[-1] - eq2.index[0]).days / 365.25
@@ -35,7 +35,8 @@ def compute_stats(df2, eq2, sells):
     n_trades = len(sells)
     win_rate = (sells['pnl_pct'] > 0).mean() * 100 if n_trades > 0 else 0.0
     avg_pnl = sells['pnl_pct'].mean() if n_trades > 0 else 0.0
-    bh_ret = (df2.iloc[-1]['close'] / df2.iloc[0]['close'] - 1) * 100
+    bh_close = hold_series if hold_series is not None else df2['close']
+    bh_ret = (bh_close.iloc[-1] / bh_close.iloc[0] - 1) * 100
     bh_ann = ((1 + bh_ret / 100) ** (1 / years) - 1) * 100
     stats = {
         'annualized_pct': round(float(ann), 1),
@@ -103,7 +104,7 @@ def build_current_status(df2, latest_position):
     }
 
 
-def build_trades(buys, sells, df2):
+def build_trades(buys, sells, df2, hold_series=None):
     trades = []
     for j in range(min(len(buys), len(sells))):
         b, s = buys.iloc[j], sells.iloc[j]
@@ -123,7 +124,9 @@ def build_trades(buys, sells, df2):
     if len(buys) > len(sells):
         b = buys.iloc[len(sells)]
         cur_price = df2.iloc[-1]['close']
-        cur_pnl = (cur_price / b['price'] - 1) * 100
+        buy_hold_price = float(b.get('hold_price', b['price']))
+        cur_hold_price = float(hold_series.iloc[-1]) if hold_series is not None else cur_price
+        cur_pnl = (cur_hold_price / buy_hold_price - 1) * 100
         trades.append({
             'seq': len(sells) + 1,
             'buy_date': b['date'].strftime('%Y-%m-%d'),
@@ -161,8 +164,9 @@ def build_sell_reason_breakdown(sells):
     ]
 
 
-def build_series(df2, eq2, dd_series):
-    bh = 100000 * df2['close'] / df2.iloc[0]['close']
+def build_series(df2, eq2, dd_series, hold_series=None):
+    bh_close = hold_series if hold_series is not None else df2['close']
+    bh = 100000 * bh_close / bh_close.iloc[0]
     eq_aligned = eq2['equity'].reindex(df2.index)
     dd_aligned = dd_series.reindex(df2.index)
     return {
@@ -191,6 +195,12 @@ def export(output_path, count_511260=2500):
         raise ValueError(
             f'980081数据只拉到{len(raw)}条,远少于预期,可能是接口返回被截断'
         )
+    hold_raw = fetch_480081_daily()
+    if len(hold_raw) < 400:
+        raise ValueError(
+            f'480081全收益数据只拉到{len(hold_raw)}条,远少于预期,可能是接口返回被截断'
+        )
+    hold_price = hold_raw['close'].reindex(raw.index).ffill().bfill()
     df = add_indicators(raw)
     df_sig = run_strategy(df, PARAMS)
 
@@ -200,17 +210,25 @@ def export(output_path, count_511260=2500):
     except Exception as e:
         print(f'511260获取失败,继续但不计空仓收益: {e}')
 
-    eq, tr = backtest(df_sig, idle_price=idle_price, comm=FEE_RATE, min_comm=FEE_MIN, lot_size=1)
+    eq, tr = backtest(
+        df_sig,
+        idle_price=idle_price,
+        hold_price=hold_price,
+        comm=FEE_RATE,
+        min_comm=FEE_MIN,
+        lot_size=1,
+    )
 
     df2 = df_sig[df_sig.index >= DISPLAY_START].copy()
     eq2 = eq[eq.index >= DISPLAY_START].copy()
+    hold2 = hold_price[df2.index]
     buys = tr[(tr['action'] == 'BUY') & (tr['date'] >= DISPLAY_START)].reset_index(drop=True)
     sells = tr[(tr['action'] == 'SELL') & (tr['date'] >= DISPLAY_START)].reset_index(drop=True)
 
     if len(sells) == 0:
         raise ValueError('回测区间内没有任何已平仓交易，无法计算统计指标——检查策略参数或数据是否异常')
 
-    stats, dd_series = compute_stats(df2, eq2, sells)
+    stats, dd_series = compute_stats(df2, eq2, sells, hold_series=hold2)
     stats['holding_pct'] = compute_holding_pct(buys, sells, df2)
 
     beijing_now = datetime.now(timezone(timedelta(hours=8)))
@@ -222,10 +240,11 @@ def export(output_path, count_511260=2500):
             'min_fee': FEE_MIN,
             'updated_at': beijing_now.isoformat(),
             'as_of_date': df2.index[-1].strftime('%Y-%m-%d'),
+            'return_basis': '480081全收益口径(159263含股息再投资代理)',
         },
         'current_status': build_current_status(df2, df2.iloc[-1]['position']),
-        'series': build_series(df2, eq2, dd_series),
-        'trades': build_trades(buys, sells, df2),
+        'series': build_series(df2, eq2, dd_series, hold_series=hold2),
+        'trades': build_trades(buys, sells, df2, hold_series=hold2),
         'sell_reason_breakdown': build_sell_reason_breakdown(sells),
     }
 

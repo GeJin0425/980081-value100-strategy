@@ -24,7 +24,7 @@ import pandas as pd
 
 from .backtest import backtest
 from .export import FEE_MIN, FEE_RATE, compute_holding_pct, compute_stats
-from .fetch import fetch_511260_close, fetch_980081_daily
+from .fetch import fetch_480081_daily, fetch_511260_close, fetch_980081_daily
 from .indicators import add_indicators
 from .strategy import PARAMS, run_strategy
 
@@ -32,19 +32,23 @@ DISPLAY_START = '2014-01-01'
 OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tuning_results')
 CACHE = os.path.join(OUT_DIR, 'data_cache.csv')
 IDLE_CACHE = os.path.join(OUT_DIR, 'idle_cache.csv')
+HOLD_CACHE = os.path.join(OUT_DIR, 'hold_cache.csv')
+HOLD_PRICE = None
 
 # 线上发布版参数(基线): tune/params-optimization 采纳候选A前的 main 参数
 BASE_PARAMS = dict(
-    b1=-2.5, b2=0.0, b2r=30.0, b3lo=0.0, b3hi=5.0,
-    s1=11.0, s2=3.0, s2r=80.0, s3pk=3.0, s3dp=2.5,
-    s4pr=1.5, s4r=70.0, cooldown=11,
+    b1=-1.5, b2=0.0, b2r=60.0, b3lo=0.0, b3hi=8.0,
+    s1=13.0, s2=8.0, s2r=60.0, s3pk=3.0, s3dp=1.5,
+    s4pr=3.0, s4r=60.0, cooldown=11,
 )
 
 
 def load_data(refresh=False):
-    if not refresh and os.path.exists(CACHE) and os.path.exists(IDLE_CACHE):
+    global HOLD_PRICE
+    if not refresh and os.path.exists(CACHE) and os.path.exists(IDLE_CACHE) and os.path.exists(HOLD_CACHE):
         df = pd.read_csv(CACHE, parse_dates=['date']).set_index('date')
         idle = pd.read_csv(IDLE_CACHE, parse_dates=['date']).set_index('date')['close']
+        HOLD_PRICE = pd.read_csv(HOLD_CACHE, parse_dates=['date']).set_index('date')['close']
         print(f'[load] 从缓存读取 {len(df)} 行 ({df.index[0].date()} -> {df.index[-1].date()})')
         return df, idle
 
@@ -52,6 +56,10 @@ def load_data(refresh=False):
     raw = fetch_980081_daily()
     raw.index.name = 'date'
     df = add_indicators(raw)
+    hold_raw = fetch_480081_daily()
+    hold_raw.index.name = 'date'
+    HOLD_PRICE = hold_raw['close'].reindex(df.index).ffill().bfill()
+    HOLD_PRICE.index.name = 'date'
     try:
         idle = fetch_511260_close(count=2500)
     except Exception as e:
@@ -60,7 +68,8 @@ def load_data(refresh=False):
     idle.index.name = 'date'
     df.reset_index().to_csv(CACHE, index=False)
     idle.reset_index().to_csv(IDLE_CACHE, index=False)
-    print(f'[fetch] 已缓存 {len(df)} 行, 511260 {len(idle)} 行')
+    HOLD_PRICE.reset_index().to_csv(HOLD_CACHE, index=False)
+    print(f'[fetch] 已缓存 {len(df)} 行, 511260 {len(idle)} 行, 480081 {len(HOLD_PRICE)} 行')
     return df, idle
 
 
@@ -68,7 +77,10 @@ def evaluate(p, df, idle, start=DISPLAY_START, comm=FEE_RATE, min_comm=FEE_MIN):
     """与线上完全一致的单参数组合评估。返回指标 dict 或 None(无可平仓交易)"""
     df_sig = run_strategy(df, p)
     try:
-        eq, tr = backtest(df_sig, idle_price=idle, comm=comm, min_comm=min_comm, lot_size=1)
+        eq, tr = backtest(
+            df_sig, idle_price=idle, hold_price=HOLD_PRICE,
+            comm=comm, min_comm=min_comm, lot_size=1,
+        )
     except Exception:
         return None
     df2 = df_sig[df_sig.index >= start]
@@ -78,7 +90,7 @@ def evaluate(p, df, idle, start=DISPLAY_START, comm=FEE_RATE, min_comm=FEE_MIN):
     if len(sells) == 0:
         return None
     try:
-        stats, _ = compute_stats(df2, eq2, sells)
+        stats, _ = compute_stats(df2, eq2, sells, hold_series=HOLD_PRICE[df2.index])
     except Exception:
         return None
     stats['holding_pct'] = compute_holding_pct(buys, sells, df2)
@@ -197,14 +209,17 @@ def cmd_validate(args, df, idle):
 def evaluate_range(params, df, idle, start, end, comm=FEE_RATE, min_comm=FEE_MIN):
     """在 [start, end] 区间内评估(交易必须在该区间内开平仓)"""
     df_sig = run_strategy(df, params)
-    eq, tr = backtest(df_sig, idle_price=idle, comm=comm, min_comm=min_comm, lot_size=1)
+    eq, tr = backtest(
+        df_sig, idle_price=idle, hold_price=HOLD_PRICE,
+        comm=comm, min_comm=min_comm, lot_size=1,
+    )
     df2 = df_sig[(df_sig.index >= start) & (df_sig.index <= end)]
     eq2 = eq[(eq.index >= start) & (eq.index <= end)]
     buys = tr[(tr['action'] == 'BUY') & (tr['date'] >= start) & (tr['date'] <= end)]
     sells = tr[(tr['action'] == 'SELL') & (tr['date'] >= start) & (tr['date'] <= end)]
     if len(sells) == 0:
         return None
-    stats, _ = compute_stats(df2, eq2, sells)
+    stats, _ = compute_stats(df2, eq2, sells, hold_series=HOLD_PRICE[df2.index])
     stats['holding_pct'] = compute_holding_pct(buys, sells, df2)
     stats['n_trades'] = stats.pop('trade_count')
     return stats
@@ -320,7 +335,10 @@ def cmd_bootstrap(args, df, idle):
 
     def daily_rets(p):
         df_sig = run_strategy(df, p)
-        eq, _ = backtest(df_sig, idle_price=idle, comm=FEE_RATE, min_comm=FEE_MIN, lot_size=1)
+        eq, _ = backtest(
+            df_sig, idle_price=idle, hold_price=HOLD_PRICE,
+            comm=FEE_RATE, min_comm=FEE_MIN, lot_size=1,
+        )
         eq = eq[eq.index >= DISPLAY_START]
         return eq['equity'].pct_change().dropna().values
 

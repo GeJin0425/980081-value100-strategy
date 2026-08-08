@@ -56,7 +56,7 @@ function fmtSigned(value, suffix = '%') {
 
 function renderKpis(meta) {
   const cards = [
-    { value: fmtSigned(meta.annualized_pct), label: '年化(含国债·万0.5)', signed: true },
+    { value: fmtSigned(meta.annualized_pct), label: '年化(全收益+国债·万0.5)', signed: true },
     { value: `${meta.max_drawdown_pct}%`, label: '最大回撤', signed: true },
     { value: meta.sharpe.toFixed(2), label: '夏普比率', signed: false },
     { value: `${meta.win_rate_pct}%`, label: `胜率(${meta.trade_count}笔)`, signed: false },
@@ -196,7 +196,7 @@ function renderReturnsPanel(series, trades) {
         textStyle: { color: '#c9d1d9' },
         valueFormatter: (value) => (value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`),
       },
-      legend: { data: ['MA250策略', '无脑持有980081'], textStyle: { color: '#8b949e' }, top: 0 },
+      legend: { data: ['MA250策略', '无脑持有480081(全收益)'], textStyle: { color: '#8b949e' }, top: 0 },
       xAxis: { type: 'category', data: dates, ...DARK_AXIS },
       yAxis: { type: 'value', scale: true, ...DARK_AXIS, axisLabel: { color: '#8b949e', formatter: '{value}%' } },
       series: [
@@ -206,7 +206,7 @@ function renderReturnsPanel(series, trades) {
           areaStyle: { color: 'rgba(63,185,80,0.08)' },
         },
         {
-          name: '无脑持有980081', type: 'line', data: toReturn(bh, bh0), showSymbol: false,
+          name: '无脑持有480081(全收益)', type: 'line', data: toReturn(bh, bh0), showSymbol: false,
           lineStyle: { width: 1.5, color: '#8b949e', type: 'dashed' },
         },
       ],
@@ -248,7 +248,7 @@ function renderReturnsPanel(series, trades) {
       { label: '区间起点', value: startDate },
       { label: '区间终点', value: endDate },
       { label: 'MA250策略收益', value: fmtSigned(stratRet.toFixed(1)), tone: toneOf(stratRet) },
-      { label: '买入持有收益', value: fmtSigned(bhRet.toFixed(1)), tone: toneOf(bhRet) },
+      { label: '买入持有收益(480081全收益)', value: fmtSigned(bhRet.toFixed(1)), tone: toneOf(bhRet) },
       { label: '超额收益', value: fmtSigned(excess.toFixed(1)), tone: toneOf(excess) },
       { label: '策略年化', value: annualized === null ? '—' : fmtSigned(annualized.toFixed(1)), tone: annualized === null ? '' : toneOf(annualized) },
       { label: '最大回撤(策略)', value: fmtSigned(maxDd.toFixed(1)), tone: toneOf(maxDd) },
@@ -338,13 +338,13 @@ function renderEquityChart(series) {
     backgroundColor: 'transparent',
     grid: baseGrid(),
     tooltip: { trigger: 'axis' },
-    legend: { data: ['MA250策略', '买入持有'], textStyle: { color: '#8b949e' }, top: 0 },
+    legend: { data: ['MA250策略', '买入持有(全收益)'], textStyle: { color: '#8b949e' }, top: 0 },
     xAxis: { type: 'category', data: series.dates, ...DARK_AXIS },
     yAxis: { type: 'value', ...DARK_AXIS },
     dataZoom: [{ type: 'inside' }, { type: 'slider' }],
     series: [
       { name: 'MA250策略', type: 'line', data: series.equity_strategy, showSymbol: false, lineStyle: { width: 2, color: '#3fb950' } },
-      { name: '买入持有', type: 'line', data: series.equity_buyhold, showSymbol: false, lineStyle: { width: 1, color: '#8b949e', type: 'dashed' } },
+      { name: '买入持有(全收益)', type: 'line', data: series.equity_buyhold, showSymbol: false, lineStyle: { width: 1, color: '#8b949e', type: 'dashed' } },
     ],
   });
   window.addEventListener('resize', () => chart.resize());

@@ -15,7 +15,7 @@ import pandas as pd
 
 from .backtest import backtest
 from .export import FEE_MIN, FEE_RATE, compute_holding_pct, compute_stats
-from .fetch import fetch_511260_close, fetch_980081_daily
+from .fetch import fetch_480081_daily, fetch_511260_close, fetch_980081_daily
 from .indicators import add_indicators
 from .strategy import PARAMS, run_strategy
 
@@ -56,17 +56,22 @@ def random_params(rng):
 
 _DF = None
 _IDLE = None
+_HOLD = None
 
 
-def _init_worker(df, idle):
-    global _DF, _IDLE
+def _init_worker(df, idle, hold):
+    global _DF, _IDLE, _HOLD
     _DF = df
     _IDLE = idle
+    _HOLD = hold
 
 
 def _metrics(p, start=DISPLAY_START, end=None):
     ds = run_strategy(_DF, p)
-    eq, tr = backtest(ds, idle_price=_IDLE, comm=FEE_RATE, min_comm=FEE_MIN, lot_size=1)
+    eq, tr = backtest(
+        ds, idle_price=_IDLE, hold_price=_HOLD,
+        comm=FEE_RATE, min_comm=FEE_MIN, lot_size=1,
+    )
     end = _DF.index[-1] if end is None else pd.Timestamp(end)
     d2 = ds[(ds.index >= pd.Timestamp(start)) & (ds.index <= end)]
     e2 = eq[(eq.index >= pd.Timestamp(start)) & (eq.index <= end)]
@@ -74,7 +79,7 @@ def _metrics(p, start=DISPLAY_START, end=None):
     sells = tr[(tr['action'] == 'SELL') & (tr['date'] >= pd.Timestamp(start)) & (tr['date'] <= end)]
     if len(sells) == 0:
         return None
-    st, _ = compute_stats(d2, e2, sells.reset_index(drop=True))
+    st, _ = compute_stats(d2, e2, sells.reset_index(drop=True), hold_series=_HOLD[d2.index])
     st['holding_pct'] = compute_holding_pct(buys.reset_index(drop=True), sells.reset_index(drop=True), d2)
     st['trade_count'] = len(sells)
     return st
@@ -140,21 +145,24 @@ def main():
 
     raw = fetch_980081_daily()
     df = add_indicators(raw)
+    hold_raw = fetch_480081_daily()
+    hold_price = hold_raw['close'].reindex(df.index).ffill().bfill()
     try:
         idle = fetch_511260_close(count=2500)
     except Exception as e:
         print(f'[warn] 511260获取失败: {e}')
         idle = pd.Series(dtype=float)
     os.makedirs(OUT_DIR, exist_ok=True)
-    global _DF, _IDLE
+    global _DF, _IDLE, _HOLD
     _DF = df
     _IDLE = idle
+    _HOLD = hold_price
 
     rng = random.Random(args.seed)
     combos = [random_params(rng) for _ in range(args.n)]
 
     t0 = time.time()
-    with ProcessPoolExecutor(max_workers=args.workers, initializer=_init_worker, initargs=(df, idle)) as pool:
+    with ProcessPoolExecutor(max_workers=args.workers, initializer=_init_worker, initargs=(df, idle, hold_price)) as pool:
         results = list(pool.map(eval_full, combos, chunksize=8))
     print(f'[random] {args.n} evals done in {time.time() - t0:.1f}s')
 
@@ -205,7 +213,7 @@ def main():
         for _ in range(args.refine):
             cands.append(perturb(p, rng))
     t1 = time.time()
-    with ProcessPoolExecutor(max_workers=args.workers, initializer=_init_worker, initargs=(df, idle)) as pool:
+    with ProcessPoolExecutor(max_workers=args.workers, initializer=_init_worker, initargs=(df, idle, hold_price)) as pool:
         eval_train = partial(_metrics, start=TRAIN_START, end=args.train_end)
         refined_results = list(pool.map(eval_train, cands, chunksize=16))
     print(f'[refine] {len(cands)} evals done in {time.time() - t1:.1f}s')

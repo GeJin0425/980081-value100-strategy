@@ -1,6 +1,6 @@
 import pandas as pd
 
-from pipeline.fetch import apply_qfq, fetch_511260_close, fetch_980081_daily
+from pipeline.fetch import apply_qfq, fetch_480081_daily, fetch_511260_close, fetch_980081_daily
 
 
 def test_apply_qfq_single_dividend():
@@ -58,6 +58,28 @@ def test_fetch_980081_daily_parses_cnindex_payload(monkeypatch):
     assert len(out) == 2
     assert out['close'].iloc[0] == 1000.6886
     assert out['adjust_factor'].iloc[-1] == 1.0
+
+
+def test_fetch_480081_daily_uses_total_return_code(monkeypatch):
+    class FakeResp:
+        def json(self):
+            return {
+                'code': 200,
+                'data': {
+                    'data': [
+                        [1357228800000, 1000.6886, 1000.6886, 1000.6886, 1000.6886, 1000.6886,
+                         0.6886, 0.0006886, None, None, None],
+                    ]
+                },
+            }
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        assert params['indexCode'] == '480081'
+        return FakeResp()
+
+    monkeypatch.setattr('pipeline.fetch.requests.get', fake_get)
+    out = fetch_480081_daily(start='2013-01-01', end='2013-01-04')
+    assert out['close'].iloc[0] == 1000.6886
 
 
 def test_fetch_511260_close_returns_qfq_close_series(monkeypatch):

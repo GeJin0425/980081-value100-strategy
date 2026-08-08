@@ -44,10 +44,11 @@ def apply_qfq(df, dividends):
 
 CNINDEX_API = 'https://hq.cnindex.com.cn/market/market/getIndexDailyData'
 CNINDEX_INDEX = '980081'  # 国证价值100 (价值ETF易方达159263跟踪的指数)
+CNINDEX_TOTAL_RETURN_INDEX = '480081'  # 国证价值100全收益(价值100R)
 
 
-def fetch_980081_daily(start='2013-01-01', end=None):
-    """拉取国证价值100(980081)官方日线。
+def fetch_cnindex_daily(index_code, start='2013-01-01', end=None):
+    """拉取国证指数官方日线(980081价格 / 480081全收益)。
 
     返回与策略引擎兼容的 DataFrame:
     open/close/high/low/volume + close_raw/high_raw/low_raw/adjust_factor。
@@ -57,7 +58,7 @@ def fetch_980081_daily(start='2013-01-01', end=None):
         end = pd.Timestamp.now(tz='Asia/Shanghai').strftime('%Y-%m-%d')
     url = CNINDEX_API
     params = {
-        'indexCode': CNINDEX_INDEX,
+        'indexCode': index_code,
         'startDate': start,
         'endDate': end,
     }
@@ -98,9 +99,19 @@ def fetch_980081_daily(start='2013-01-01', end=None):
                         'close_raw', 'high_raw', 'low_raw', 'adjust_factor']]
         except Exception as e:
             if attempt == 3:
-                raise RuntimeError(f'无法获取980081行情: {e}') from e
+                raise RuntimeError(f'无法获取{index_code}行情: {e}') from e
             time.sleep(1.2 * (attempt + 1))
-    raise RuntimeError('无法获取980081行情')
+    raise RuntimeError(f'无法获取{index_code}行情')
+
+
+def fetch_980081_daily(start='2013-01-01', end=None):
+    """国证价值100价格指数日线(策略信号用)"""
+    return fetch_cnindex_daily(CNINDEX_INDEX, start=start, end=end)
+
+
+def fetch_480081_daily(start='2013-01-01', end=None):
+    """国证价值100全收益指数日线(持仓收益/买入持有基准用)"""
+    return fetch_cnindex_daily(CNINDEX_TOTAL_RETURN_INDEX, start=start, end=end)
 
 
 def fetch_511260_close(count=2500):
