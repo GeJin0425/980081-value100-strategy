@@ -7,31 +7,43 @@ import pipeline.export as export_mod
 
 
 def _build_fixture():
-    # 总长度需 >= export.py 的 400 条最小史长哨兵检查（见 export() 里的截断保护）
-    dates = pd.date_range('2018-01-01', periods=410, freq='D')
-    prices = np.concatenate([
-        np.full(260, 100.0),               # 260天平盘，喂饱MA250热身期
-        [95.0],                             # 急跌 -> 偏离度<-2% 触发L1买入
-        np.linspace(96.0, 118.0, 19),        # 连续拉升
-        np.full(130, 118.0),                # 高位横盘
-    ])
+    n = 1400
+    dates = pd.date_range('2017-01-01', periods=n, freq='D')
+    t = np.arange(n)
+    price = 1000 + t * 2.0
+    # 全收益指数相对价格指数先加速后减速(股息率先升后降), 触发一次买入和一次卖出
+    peak = int(n * 0.6)
+    ratio = np.ones(n)
+    ratio[:peak] = 1.0 + 0.12 * (t[:peak] / peak) ** 2
+    ratio[peak:] = 1.0 + 0.12 - 0.12 * ((t[peak:] - peak) / (n - peak)) ** 2
+    hold = price * ratio
     df = pd.DataFrame({
-        'open': prices, 'close': prices, 'high': prices, 'low': prices,
-        'volume': np.full(410, 1_000_000.0),
-        'close_raw': prices, 'high_raw': prices, 'low_raw': prices,
-        'adjust_factor': np.ones(410),
+        'open': price, 'close': price, 'high': price, 'low': price,
+        'volume': np.full(n, 1_000_000.0),
+        'close_raw': price, 'high_raw': price, 'low_raw': price,
+        'adjust_factor': np.ones(n),
     }, index=dates)
-    idle = pd.Series(np.full(410, 100.0), index=dates)
-    return df, idle
+    hold_df = df.copy()
+    hold_df['open'] = hold_df['close'] = hold_df['high'] = hold_df['low'] = hold_df['close_raw'] = \
+        hold_df['high_raw'] = hold_df['low_raw'] = hold
+    pe = pd.Series(8 + 6 * t / n, index=dates, name='pe')
+    cn10y = pd.Series(np.full(n, 2.0), index=dates, name='cn10y')
+    idle = pd.Series(np.full(n, 100.0), index=dates)
+    return df, hold_df, pe, cn10y, idle
 
 
 def test_export_end_to_end(tmp_path, monkeypatch):
-    fixture_df, fixture_idle = _build_fixture()
-    monkeypatch.setattr(export_mod, 'fetch_980081_daily', lambda: fixture_df)
-    monkeypatch.setattr(export_mod, 'fetch_480081_daily', lambda: fixture_df)
-    monkeypatch.setattr(export_mod, 'fetch_511260_close', lambda count=2500: fixture_idle)
-    # 跳过前250+天MA250热身期，避免展示窗口内出现NaN
-    monkeypatch.setattr(export_mod, 'DISPLAY_START', fixture_df.index[255].strftime('%Y-%m-%d'))
+    price, hold, pe, cn10y, idle = _build_fixture()
+    monkeypatch.setattr(export_mod, 'fetch_980081_daily', lambda: price)
+    monkeypatch.setattr(export_mod, 'fetch_480081_daily', lambda: hold)
+    monkeypatch.setattr(export_mod, 'fetch_csindex_daily_pe', lambda: pe)
+    monkeypatch.setattr(export_mod, 'fetch_cn10y', lambda: cn10y)
+    monkeypatch.setattr(export_mod, 'fetch_511260_close', lambda count=2500: idle)
+    monkeypatch.setattr(export_mod, 'DISPLAY_START', '2018-06-01')
+    monkeypatch.setattr(export_mod, 'TRAIN_START', '2018-06-01')
+    monkeypatch.setattr(export_mod, 'TRAIN_END', '2019-06-30')
+    monkeypatch.setattr(export_mod, 'TEST_START', '2019-07-01')
+    monkeypatch.setattr(export_mod, 'TEST_END', '2020-06-30')
 
     out_path = tmp_path / 'data.json'
     payload = export_mod.export(str(out_path))
@@ -40,48 +52,15 @@ def test_export_end_to_end(tmp_path, monkeypatch):
     reloaded = json.loads(out_path.read_text(encoding='utf-8'))
     assert reloaded == payload
 
-    assert payload['meta']['trade_count'] >= 1
-    assert len(payload['trades']) >= 1
-    assert payload['trades'][0]['sell_reason']
-    assert payload['current_status']['date'] == fixture_df.index[-1].strftime('%Y-%m-%d')
-    for key in ('dates', 'close', 'ma250', 'rsi14', 'macd', 'equity_strategy'):
+    assert payload['meta']['train']['annualized_pct'] is not None
+    assert payload['meta']['test']['annualized_pct'] is not None
+    assert payload['meta']['full']['annualized_pct'] is not None
+    assert payload['current_status']['date'] == price.index[-1].strftime('%Y-%m-%d')
+    assert 'value_score' in payload['current_status']
+    for key in ('dates', 'close', 'weight', 'value_score', 'pe_pct', 'spread',
+                'equity_strategy', 'equity_buyhold'):
         assert key in payload['series']
         assert len(payload['series'][key]) == len(payload['series']['dates'])
     assert 'NaN' not in out_path.read_text(encoding='utf-8')
-
-
-def test_build_current_status_sell_signal_triggered():
-    dates = pd.date_range('2020-01-01', periods=1)
-    df2 = pd.DataFrame({
-        'close_raw': [10.7], 'deviation': [7.5], 'rsi': [80.0], 'rsi6': [82.0],
-        'ma250': [10.0], 'ma250_slope': [0.3],
-    }, index=dates)
-    status = export_mod.build_current_status(df2, latest_position=1)
-    assert status['holding'] is True
-    assert status['signal_level'] == 'sell'
-    assert status['signal_text'] == '卖出信号触发!'
-
-
-def test_build_current_status_idle_buy_triggered():
-    dates = pd.date_range('2020-01-01', periods=1)
-    df2 = pd.DataFrame({
-        'close_raw': [9.7], 'deviation': [-3.0], 'rsi': [30.0], 'rsi6': [28.0],
-        'ma250': [10.0], 'ma250_slope': [-0.1],
-    }, index=dates)
-    status = export_mod.build_current_status(df2, latest_position=0)
-    assert status['holding'] is False
-    assert status['signal_level'] == 'buy'
-    assert status['signal_text'] == '空仓国债 | 极端买入触发!'
-
-
-def test_build_sell_reason_breakdown_groups_by_tier():
-    sells = pd.DataFrame([
-        {'reason': '硬上限:15.0%', 'pnl_pct': 8.0},
-        {'reason': 'RSI确认:RSI=80,偏离8.0%', 'pnl_pct': 6.0},
-        {'reason': 'RSI确认:RSI=76,偏离9.0%', 'pnl_pct': 4.0},
-    ])
-    breakdown = export_mod.build_sell_reason_breakdown(sells)
-    by_reason = {b['reason']: b for b in breakdown}
-    assert by_reason['RSI确认']['count'] == 2
-    assert by_reason['RSI确认']['avg_pnl_pct'] == 5.0
-    assert by_reason['硬上限']['count'] == 1
+    assert len(payload['regime_events']) >= 1
+    assert len(payload['rebalances']) >= 1

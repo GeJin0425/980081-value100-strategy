@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>国证价值100(980081) · MA250策略仪表盘</title>
+<title>国证价值100(980081) · 估值分位+波动率目标+息差策略</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 </head>
 <body>
   <header class="topbar">
     <span id="status-dot" class="status-dot"></span>
-    <h1>国证价值100(980081) · MA250策略</h1>
+    <h1>国证价值100(980081) · 估值分位+波动率目标+息差策略</h1>
     <span id="updated-at" class="updated-at"></span>
   </header>
 
@@ -19,7 +19,7 @@
   <section class="status-card" id="status-card"></section>
 
   <section class="panel" id="panel-main">
-    <h2>价格 &amp; MA250</h2>
+    <h2>价格 &amp; 目标仓位</h2>
     <div class="chart-toolbar" id="chart-price-ranges">
       <button class="range-btn active" data-range="all">全部</button>
       <button class="range-btn" data-range="ytd">YTD</button>
@@ -28,6 +28,18 @@
       <button class="range-btn" data-range="5y">近5年</button>
     </div>
     <div class="chart" id="chart-price"></div>
+  </section>
+
+  <section class="panel" id="panel-valuation">
+    <h2>估值分位 &amp; 股息率-利率差</h2>
+    <div class="chart-toolbar" id="valuation-ranges">
+      <button class="range-btn active" data-range="all">全部</button>
+      <button class="range-btn" data-range="ytd">YTD</button>
+      <button class="range-btn" data-range="1y">近1年</button>
+      <button class="range-btn" data-range="3y">近3年</button>
+      <button class="range-btn" data-range="5y">近5年</button>
+    </div>
+    <div class="chart" id="chart-valuation"></div>
   </section>
 
   <section class="panel" id="panel-returns">
@@ -51,49 +63,37 @@
     </table>
   </section>
 
-  <details class="panel collapsible">
-    <summary>偏离度</summary>
-    <div class="chart" id="chart-deviation"></div>
-  </details>
-
-  <details class="panel collapsible">
-    <summary>RSI</summary>
-    <div class="chart" id="chart-rsi"></div>
-  </details>
-
-  <details class="panel collapsible">
-    <summary>MACD</summary>
-    <div class="chart" id="chart-macd"></div>
-  </details>
-
-  <details class="panel collapsible">
-    <summary>策略 vs 买入持有</summary>
-    <div class="chart" id="chart-equity"></div>
-  </details>
-
-  <details class="panel collapsible">
-    <summary>卖出原因分布</summary>
-    <div class="chart" id="chart-sell-reason"></div>
-  </details>
-
-  <details class="panel collapsible">
-    <summary>全部交易明细</summary>
-    <p class="table-note">指数为点位,策略收益按同一指数点位计算;空仓期配置511260十年国债ETF。</p>
-    <table class="trades-table" id="trades-table">
+  <section class="panel" id="panel-periods">
+    <h2>训练集 / 测试集对比</h2>
+    <table class="returns-table" id="periods-table">
       <thead>
         <tr>
-          <th>序号</th><th>买入日期</th><th>卖出日期</th><th>买价(不复权)</th>
-          <th>卖价(不复权)</th><th>收益%</th><th>持仓天</th><th>卖出原因</th>
+          <th>区间</th><th>年化</th><th>最大回撤</th><th>夏普</th>
+          <th>平均仓位</th><th>调仓次数</th><th>超额年化</th>
         </tr>
       </thead>
-      <tbody id="trades-table-body"></tbody>
+      <tbody id="periods-table-body"></tbody>
     </table>
-  </details>
+    <p class="table-note">训练集 2018-01-01 ~ 2022-12-31, 测试集 2023-01-01 ~ 2026-12-31(至今)。买入持有基准为480081全收益。</p>
+  </section>
+
+  <section class="panel" id="panel-rebalances">
+    <h2>最近调仓记录</h2>
+    <p class="table-note">仓位按波动率目标每日平滑调整, 表中仅记录变动超过容忍度的调仓(佣金万0.5, 单笔最低0.5元)。</p>
+    <table class="trades-table" id="rebalances-table">
+      <thead>
+        <tr>
+          <th>日期</th><th>调仓前</th><th>调仓后</th><th>费用</th>
+        </tr>
+      </thead>
+      <tbody id="rebalances-table-body"></tbody>
+    </table>
+  </section>
 
   <footer class="footer">
     <p id="data-error" class="data-error" hidden></p>
-    <p>数据来源:国证指数官网(980081价格/480081全收益) + 腾讯财经(511260日线) | 每日北京时间15:40自动更新</p>
-    <p>收益口径:策略信号看980081价格与MA250,持仓收益/买入持有基准按480081全收益(近似159263含股息再投资)。</p>
+    <p>数据来源:国证指数官网(980081价格/480081全收益) + 中证指数官网(000922估值代理) + 新浪财经(10Y国债) + 腾讯财经(511260日线) | 每日北京时间15:40自动更新</p>
+    <p>估值口径:980081自身近12个月股息率(由全收益/价格推导) + 中证红利PE历史分位(代理, 980081无官方免费历史PE) + 股息率-10Y国债息差。</p>
     <p class="disclaimer">本页面为个人量化研究记录,不构成投资建议。历史回测结果不代表未来收益。</p>
   </footer>
 

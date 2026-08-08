@@ -1,6 +1,7 @@
 import time
 
 import requests
+import akshare as ak
 
 import numpy as np
 import pandas as pd
@@ -45,6 +46,8 @@ def apply_qfq(df, dividends):
 CNINDEX_API = 'https://hq.cnindex.com.cn/market/market/getIndexDailyData'
 CNINDEX_INDEX = '980081'  # 国证价值100 (价值ETF易方达159263跟踪的指数)
 CNINDEX_TOTAL_RETURN_INDEX = '480081'  # 国证价值100全收益(价值100R)
+CSINDEX_PERF_API = 'https://www.csindex.com.cn/csindex-home/perf/index-perf'
+PE_PROXY_INDEX = '000922'  # 中证红利: 980081无官方免费历史PE, 用高股息价值指数PE做估值代理
 
 
 def fetch_cnindex_daily(index_code, start='2013-01-01', end=None):
@@ -118,3 +121,71 @@ def fetch_511260_close(count=2500):
     """拉取511260十年国债ETF前复权收盘价序列（空仓期配置资产, 含现金分红）"""
     raw = get_price('sh511260', frequency='1d', count=count)
     return apply_qfq(raw, DIVIDENDS_511260)['close']
+
+
+def fetch_csindex_daily_pe(index_code=PE_PROXY_INDEX, start='2013-01-01', end=None):
+    """中证指数官网: 指数日线+滚动市盈率(peg列), 免费覆盖2013至今。
+
+    980081/480081是国证指数, 官网不提供历史估值; 这里用中证红利(000922)
+    的历史PE作为价值因子的代理(高股息价值指数, 与国证价值100高度同质)。
+    """
+    if end is None:
+        end = pd.Timestamp.now(tz='Asia/Shanghai').strftime('%Y%m%d')
+    params = {
+        'indexCode': index_code,
+        'startDate': pd.Timestamp(start).strftime('%Y%m%d'),
+        'endDate': pd.Timestamp(end).strftime('%Y%m%d'),
+    }
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        ),
+        'Referer': 'https://www.csindex.com.cn/',
+    }
+    for attempt in range(5):
+        try:
+            resp = requests.get(CSINDEX_PERF_API, params=params, headers=headers, timeout=30)
+            payload = resp.json()
+            rows = payload.get('data')
+            if str(payload.get('code')) != '200' or not rows:
+                raise RuntimeError(
+                    f'中证接口返回空: {payload.get("code")} {payload.get("message", "")} '
+                    f'resp={resp.text[:120]}'
+                )
+            s = pd.Series(
+                [float(r['peg']) if r.get('peg') is not None else np.nan for r in rows],
+                index=pd.DatetimeIndex([pd.Timestamp(r['tradeDate']) for r in rows]),
+                name='pe',
+            )
+            s = s[~s.index.duplicated(keep='last')].sort_index()
+            return s
+        except Exception as e:
+            if attempt == 3:
+                raise RuntimeError(f'无法获取{index_code}估值: {e}') from e
+            time.sleep(5.0 * (attempt + 1))
+    raise RuntimeError(f'无法获取{index_code}估值')
+
+
+def fetch_cn10y(start='2013-01-01', end=None):
+    """中国人民银行口径的中国10年期国债到期收益率(日度, 来源于AkShare/新浪财经)。"""
+    df = ak.bond_zh_us_rate(start_date=pd.Timestamp(start).strftime('%Y%m%d'))
+    s = df.set_index(pd.to_datetime(df['日期']))['中国国债收益率10年'].dropna().astype(float)
+    s = s[~s.index.duplicated(keep='last')].sort_index()
+    if end is not None:
+        s = s[s.index <= pd.Timestamp(end)]
+    s.index.name = 'date'
+    s.name = 'cn10y'
+    return s
+
+
+def derive_trailing_div_yield(price, total_return, window=252):
+    """由价格指数与全收益指数推导近N日(默认一年)实际股息率。
+
+    全收益/价格之比的变化率就是指数成分股分红带来的累计收益,
+    因此 (TR_t/P_t)/(TR_{t-N}/P_{t-N}) - 1 即近N个交易日股息率。
+    980081自身官方可获得的真实股息率序列。
+    """
+    p = price.reindex(total_return.index).ffill().bfill()
+    ratio = total_return / p
+    return (ratio / ratio.shift(window) - 1) * 100
