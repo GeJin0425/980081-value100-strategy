@@ -7,9 +7,11 @@
 2. 股息率-央行利率差: spread = 980081股息率 - 中国10年期国债收益率。
 3. 波动率目标: 目标组合波动率 target_vol, 用60日已实现年化波动率缩放仓位。
 
-状态机(滞后, 减少来回):
+状态机(滞后 + 确认期, 减少来回):
   空仓 -> 满仓候选: value_score >= value_enter 且 spread >= spread_enter
+                    连续 entry_confirm 天
   满仓 -> 空仓:     value_score <= value_exit 或 spread <= spread_exit
+                    连续 exit_confirm 天
 目标仓位 = 状态 * min(1, target_vol / 已实现波动率), 空仓部分配置511260。
 调仓容忍度 rebalance_tol 避免微小调仓产生过多佣金。
 """
@@ -18,15 +20,17 @@ import numpy as np
 import pandas as pd
 
 PARAMS = dict(
-    value_enter=0.25,
+    value_enter=0.30,
     value_exit=0.15,
-    spread_enter=0.30,
+    spread_enter=0.90,
     spread_exit=-0.50,
-    target_vol=16.0,
-    vol_window=60,
+    target_vol=15.0,
+    vol_window=55,
     pct_window=1260,
     pct_min=252,
     rebalance_tol=0.03,
+    entry_confirm=4,
+    exit_confirm=3,
 )
 
 TRAIN_START = '2018-01-01'
@@ -37,8 +41,15 @@ TEST_END = '2026-12-31'
 
 def _rolling_percentile(s, window, min_periods):
     """滚动窗口内, 当前值 >= 历史多少比例(0~1)。只用过去数据, 无未来函数。"""
+    def _pct(x):
+        if np.isnan(x[-1]):
+            return np.nan
+        xv = x[~np.isnan(x)]
+        if len(xv) < min_periods:
+            return np.nan
+        return float(np.mean(xv <= xv[-1]))
     return s.rolling(window, min_periods=min_periods).apply(
-        lambda x: float((x[-1] >= x).mean()), raw=True
+        _pct, raw=True
     )
 
 
@@ -79,16 +90,28 @@ def run_factor_strategy(df, params=PARAMS):
     sp = out['spread']
     state = np.zeros(len(out), dtype=int)
     cur = 0
+    entry_streak = 0
+    exit_streak = 0
     for i in range(len(out)):
         v = vs.iloc[i]
         s = sp.iloc[i]
         if np.isnan(v) or np.isnan(s):
             state[i] = cur
+            entry_streak = 0
+            exit_streak = 0
             continue
-        if cur == 0 and v >= params['value_enter'] and s >= params['spread_enter']:
-            cur = 1
-        elif cur == 1 and (v <= params['value_exit'] or s <= params['spread_exit']):
-            cur = 0
+        entry_ok = v >= params['value_enter'] and s >= params['spread_enter']
+        exit_ok = v <= params['value_exit'] or s <= params['spread_exit']
+        if cur == 0:
+            entry_streak = entry_streak + 1 if entry_ok else 0
+            if entry_streak >= params['entry_confirm']:
+                cur = 1
+                entry_streak = 0
+        else:
+            exit_streak = exit_streak + 1 if exit_ok else 0
+            if exit_streak >= params['exit_confirm']:
+                cur = 0
+                exit_streak = 0
         state[i] = cur
     out['regime'] = state
     out['target_weight'] = (out['regime'] * out['vol_scale']).fillna(0.0)
