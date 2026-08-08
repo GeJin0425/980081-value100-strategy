@@ -35,9 +35,9 @@ IDLE_CACHE = os.path.join(OUT_DIR, 'idle_cache.csv')
 
 # 线上发布版参数(基线): tune/params-optimization 采纳候选A前的 main 参数
 BASE_PARAMS = dict(
-    b1=-2.5, b2=0.0, b2r=40.0, b3lo=0.0, b3hi=5.0,
-    s1=12.0, s2=4.0, s2r=70.0, s3pk=4.0, s3dp=1.5,
-    s4pr=3.0, s4r=65.0, cooldown=10,
+    b1=-2.5, b2=0.0, b2r=30.0, b3lo=0.0, b3hi=5.0,
+    s1=11.0, s2=3.0, s2r=80.0, s3pk=3.0, s3dp=2.5,
+    s4pr=1.5, s4r=70.0, cooldown=11,
 )
 
 
